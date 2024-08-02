@@ -12,20 +12,21 @@ namespace SqlScriptGenerator
         {
 
             try {
-                
-            string source = ""; // SQL Server connection string
+            Console.WriteLine("Starting the process...");    
+           string source = ""; // SQL Server connection string
             string target = ""; // PostgreSQL connection string
-            
+            File.WriteAllText("alterscript.txt", "");
+            File.WriteAllText("newTable.txt", "");
             List<ColumnDetail> sourceTables = new List<ColumnDetail>();
             List<ColumnDetail> sourceData = new List<ColumnDetail>();
             List<ColumnDetail> destinationData = new List<ColumnDetail>();
             List<ColumnDetail> missingColumnData = new List<ColumnDetail>();
 
-            string query =$"select TABLE_NAME  column_name,'' IS_NULLABLE,'' DATA_TYPE,'' NUMERIC_PRECISION,'' NUMERIC_SCALE from INFORMATION_SCHEMA.TABLES";
+            string query =$"select TABLE_NAME  column_name,'' IS_NULLABLE,'' DATA_TYPE,'' CHARACTER_MAXIMUM_LENGTH,'' NUMERIC_PRECISION,'' NUMERIC_SCALE from INFORMATION_SCHEMA.TABLES";
             sourceTables = GetSqlServerSchema(source, query);
             foreach (var item in sourceTables)
             {
-                query =$"SELECT COLUMN_NAME,IS_NULLABLE,DATA_TYPE,NUMERIC_PRECISION,NUMERIC_SCALE from INFORMATION_SCHEMA.COLUMNS where TABLE_NAME='{item.ColumnName.ToLower()}'";
+                query =$"SELECT lower(COLUMN_NAME) COLUMN_NAME,IS_NULLABLE,DATA_TYPE,CHARACTER_MAXIMUM_LENGTH,NUMERIC_PRECISION,NUMERIC_SCALE from INFORMATION_SCHEMA.COLUMNS where TABLE_NAME='{item.ColumnName.ToLower()}' and COLUMN_NAME not like '%RowId%' and COLUMN_NAME not like '%Row_Id' AND COLUMN_NAME!= 'SysStartTime' AND COLUMN_NAME!= 'SysEndTime' and COLUMN_NAME!= 'rowvalue' ";
                 sourceData = GetSqlServerSchema(source, query);
                 destinationData = GetPostgreSqlSchema(target, tableName:item.ColumnName.ToLower());
                // If both source and destination has table 
@@ -35,14 +36,14 @@ namespace SqlScriptGenerator
                     if(missingColumnData.Count > 0)
                     {
                         string sqlScript = GenerateSqlScript(item.ColumnName.ToLower(), missingColumnData);
-                        Console.WriteLine(sqlScript);
+                        File.AppendAllText("alterscript.txt", sqlScript + Environment.NewLine);
                     }
                 }else
                 {
-                    Console.WriteLine($"Table {item.ColumnName.ToLower()} not found in destination");
-                }
-                
+                    File.AppendAllText("newTable.txt", item.ColumnName.ToLower() + Environment.NewLine);
+                } 
             }
+             Console.WriteLine("End the process...");  
             } catch (Exception ex) { Console.WriteLine(ex.Message); }
         }
         static List<ColumnDetail> GetSqlServerSchema(string connectionString, string query)
@@ -62,7 +63,8 @@ namespace SqlScriptGenerator
                             IsNullable = reader["IS_NULLABLE"].ToString(),
                             DataType = reader["DATA_TYPE"].ToString(),
                             NumericPrecision = reader["NUMERIC_PRECISION"].ToString(),
-                            NumericScale = reader["NUMERIC_SCALE"].ToString()
+                            NumericScale = reader["NUMERIC_SCALE"].ToString(),
+                            Length = reader["CHARACTER_MAXIMUM_LENGTH"].ToString()
                         }
                     );
                 }
@@ -117,13 +119,15 @@ namespace SqlScriptGenerator
 
             foreach (var column in columns)
             {
-                string nullability = column.IsNullable == "YES" ? "NULL" : "NOT NULL";
+                string nullability = column.IsNullable == "YES" ? "null" : "not null" + ((column.DataType.ToLower() == "numeric" || column.DataType.ToLower() == "bigint" || column.DataType.ToLower() == "int")  ? " default 0" : string.Empty);
                 string precisionScale = column.DataType.ToLower() == "numeric" ? 
                     $"({column.NumericPrecision}, {column.NumericScale})" : 
-                    (column.DataType.ToLower() == "decimal" ? 
-                    $"({column.NumericPrecision}, {column.NumericScale})" : string.Empty);
+                    column.DataType.ToLower() == "decimal" ? 
+                    $"({column.NumericPrecision}, {column.NumericScale})" : 
+                    (column.DataType.ToLower() == "nvarchar" || column.DataType.ToLower() == "varchar" || column.DataType.ToLower() == "char") ? 
+                    $"({column.Length})" : string.Empty;
 
-                sb.AppendLine($"ALTER TABLE {tableName} ADD {column.ColumnName} {column.DataType} {precisionScale} {nullability};");
+                sb.AppendLine($"alter table {tableName} add {column.ColumnName} {column.DataType} {precisionScale} {nullability};");
             }
 
             return sb.ToString();
@@ -137,5 +141,6 @@ namespace SqlScriptGenerator
         public string DataType { get; set; }
         public string NumericPrecision { get; set; }
         public string NumericScale { get; set; }
+        public string Length { get; set; }
     }
 }
