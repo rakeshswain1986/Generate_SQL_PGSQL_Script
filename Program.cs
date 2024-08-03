@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Data.SqlClient;
 using Npgsql;
+using System.Collections;
 
 namespace SqlScriptGenerator
 {
@@ -13,7 +14,7 @@ namespace SqlScriptGenerator
 
             try {
             Console.WriteLine("Starting the process...");    
-           string source = ""; // SQL Server connection string
+            string source = ""; // SQL Server connection string
             string target = ""; // PostgreSQL connection string
             File.WriteAllText("alterscript.txt", "");
             File.WriteAllText("newTable.txt", "");
@@ -40,7 +41,11 @@ namespace SqlScriptGenerator
                     }
                 }else
                 {
-                    File.AppendAllText("newTable.txt", item.ColumnName.ToLower() + Environment.NewLine);
+                   if(!item.ColumnName.ToLower().StartsWith("du_") || item.ColumnName.ToLower().StartsWith("st_"))
+                   {
+                     string sqlScript = GenerateSqlScript(item.ColumnName.ToLower(), sourceData,isAlter:false);
+                    File.AppendAllText("newTable.txt", sqlScript + Environment.NewLine);
+                   }
                 } 
             }
              Console.WriteLine("End the process...");  
@@ -113,23 +118,53 @@ namespace SqlScriptGenerator
             }
             return notInDestination;
         }
-        static string GenerateSqlScript(string tableName, List<ColumnDetail> columns)
+        static string GenerateSqlScript(string tableName, List<ColumnDetail> columns,bool isAlter = true)
         {
             var sb = new StringBuilder();
-
+            sb.AppendLine($"-- changeset ivycpg:{System.DateTime.Now.Date.ToString("yyyyMMdd")}-1 labels:CPG_Missing_Columns_Add");
+            if(!isAlter) sb.AppendLine($"create table {tableName} (");
             foreach (var column in columns)
             {
-                string nullability = column.IsNullable == "YES" ? "null" : "not null" + ((column.DataType.ToLower() == "numeric" || column.DataType.ToLower() == "bigint" || column.DataType.ToLower() == "int")  ? " default 0" : string.Empty);
-                string precisionScale = column.DataType.ToLower() == "numeric" ? 
-                    $"({column.NumericPrecision}, {column.NumericScale})" : 
-                    column.DataType.ToLower() == "decimal" ? 
-                    $"({column.NumericPrecision}, {column.NumericScale})" : 
-                    (column.DataType.ToLower() == "nvarchar" || column.DataType.ToLower() == "varchar" || column.DataType.ToLower() == "char") ? 
-                    $"({column.Length})" : string.Empty;
-
+                string precisionScale = string.Empty;
+                string nullability = column.IsNullable == "YES" ? "null" : "not null" + ((column.DataType.ToLower() == "numeric" || column.DataType.ToLower() == "bigint" || column.DataType.ToLower() == "int" || column.DataType.ToLower() == "smallint")  ? " default 0" : string.Empty);
+                switch(column.DataType.ToLower()){
+                  case "bit":
+                    column.DataType = "boolean";
+                    break;
+                  case "nvarchar":
+                    column.DataType = column.Length == "-1" ? "text" :"varchar";
+                    precisionScale = column.Length != "-1"? $"({column.Length})":string.Empty;
+                    break;
+                  case "varchar":
+                    column.DataType = column.Length == "-1" ? "text" :"varchar";
+                    precisionScale = column.Length != "-1"? $"({column.Length})":string.Empty;
+                    break;
+                  case "char":
+                    column.DataType = "varchar";
+                    precisionScale = $"(1)";
+                    break;
+                  case "datetime":
+                    column.DataType = "timestamp";
+                    break;
+                  case "bigint":
+                    column.DataType = "int8";
+                    break;
+                  case "int":
+                    column.DataType = "int4";
+                    break;
+                  case "smallint":
+                    column.DataType = "int2";
+                    break;
+                  case "decimal":
+                    column.DataType = "numeric";
+                    precisionScale = $"({column.NumericPrecision}, {column.NumericScale})";
+                    break;};
+                if(isAlter) 
                 sb.AppendLine($"alter table {tableName} add {column.ColumnName} {column.DataType} {precisionScale} {nullability};");
+                else
+                sb.AppendLine($"{column.ColumnName} {column.DataType} {precisionScale} {nullability},");
             }
-
+            if(!isAlter) sb.AppendLine(");");
             return sb.ToString();
         }
     }
